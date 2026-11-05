@@ -12,11 +12,12 @@
  * Back office and website:
  *   GET    /api/orders            list orders, newest first
  *   PATCH  /api/orders/:id        { status: new | confirmed | out_for_delivery | delivered }
- *   DELETE /api/orders            clear the board (needs X-Admin-Token if ADMIN_TOKEN is set)
+ *   DELETE /api/orders            reset to the demo history (?mode=empty clears everything);
+ *                                 needs X-Admin-Token if ADMIN_TOKEN is set
  *   GET    /api/catalog           products and demo customers
  *   GET    /healthz
  *
- * Environment: PORT, DATA_DIR, API_KEY (optional, header X-API-Key on agent tools),
+ * Environment: PORT, DATA_DIR, SEED_DEMO (default true: start with ~2 weeks of demo orders), API_KEY (optional, header X-API-Key on agent tools),
  *              ADMIN_TOKEN (optional, header X-Admin-Token on status changes / clear).
  */
 
@@ -242,6 +243,79 @@ function parseItems(raw) {
   return { items, unmatched };
 }
 
+
+// ---------- demo history ----------
+// A realistic order history, regenerated whenever the server starts with no orders
+// (Render's free plan wipes the disk when the service sleeps). Dates are relative to today.
+const SEED_DEMO = (process.env.SEED_DEMO || 'true') !== 'false';
+const SEED_DAYS = 14;
+
+// Typical baskets per business type: [sku, min cases, max cases]
+const BASKETS = {
+  'Café': [['CC-ORIG-250G', 2, 4], ['CC-ZERO-330C', 1, 3], ['AMITA-ORA-1L', 2, 5], ['SCH-TONIC-250G', 1, 2], ['AVRA-500P', 3, 6], ['COSTA-BEANS-1K', 1, 1], ['FUZE-LEMON-500P', 1, 3]],
+  'Mini market': [['CC-ORIG-330C', 4, 8], ['CC-ZERO-330C', 3, 6], ['CC-ORIG-1500P', 4, 10], ['AVRA-1500P', 8, 20], ['MONSTER-500C', 2, 4], ['TSAKIRIS-SALT-90', 2, 4], ['FANTA-ORA-330C', 2, 4], ['AMITA-4F-1L', 1, 3]],
+  'Taverna': [['CC-ORIG-250G', 3, 6], ['SCH-SODA-250G', 1, 3], ['AVRA-1500P', 10, 20], ['FANTA-LEM-330C', 1, 3], ['PLOMARI-700', 1, 2], ['AMITA-ORA-1L', 1, 2]],
+  'Kiosk': [['CC-ORIG-330C', 3, 6], ['CC-ZERO-500P', 2, 4], ['AVRA-500P', 4, 8], ['MONSTER-500C', 2, 5], ['MONSTER-ULTRA-500C', 1, 3], ['TSAKIRIS-SALT-90', 1, 3], ['SPRITE-330C', 1, 2], ['POWERADE-500P', 1, 2]],
+  'Bar': [['3C-TONIC-200G', 2, 5], ['3C-PINK-200G', 1, 3], ['3C-GINGER-200G', 1, 3], ['SCH-SODA-250G', 1, 2], ['APEROL-700', 1, 2], ['FINLANDIA-700', 1, 2], ['AVRA-500P', 4, 8], ['MONSTER-500C', 1, 2]],
+};
+const SEED_SOURCES = ['Voice order line', 'Voice order line', 'Voice order line', 'Sales rep visit', 'Customer portal'];
+const SEED_NOTES = ['', '', '', 'Deliver before 11:00', 'Use the side entrance', 'Collect empty crates', 'Call on arrival'];
+
+function seededRandom(seed) {
+  let x = seed >>> 0;
+  return () => { x = (x * 1664525 + 1013904223) >>> 0; return x / 4294967296; };
+}
+
+function buildDemoHistory() {
+  const today = athensToday();
+  const rnd = seededRandom(Number(iso(today).replace(/-/g, '')));
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+  const between = (a, b) => a + Math.floor(rnd() * (b - a + 1));
+  const list = [];
+  const used = new Set();
+
+  for (let daysAgo = SEED_DAYS; daysAgo >= 0; daysAgo--) {
+    const day = new Date(today.getTime());
+    day.setUTCDate(day.getUTCDate() - daysAgo);
+    if (day.getUTCDay() === 0) continue; // no orders on Sundays
+    const count = daysAgo === 0 ? 2 : between(1, 3);
+    for (let n = 0; n < count; n++) {
+      const c = pick(CUSTOMERS);
+      const basket = BASKETS[c.type] || BASKETS['Mini market'];
+      const lines = basket.filter(() => rnd() < 0.6);
+      if (lines.length < 2) lines.push(...basket.slice(0, 2 - lines.length));
+      const items = [...new Map(lines.map((l) => [l[0], l])).values()].map(([sku, lo, hi]) => {
+        const p = PRODUCTS.find((x) => x.sku === sku);
+        const cases = between(lo, hi);
+        return { sku, name: p.name, pack: p.pack, category: p.category, cases, price_per_case_eur: p.price,
+                 line_total_eur: Math.round(p.price * cases * 100) / 100 };
+      });
+      const created = new Date(day.getTime());
+      created.setUTCHours(5 + between(0, 9), between(0, 59), between(0, 59), 0); // 07:00-16:59 Athens
+      if (daysAgo === 0 && created > new Date()) created.setTime(Date.now() - between(20, 120) * 60000);
+      const delivery = nextDeliveryDate(c, day);
+      const todayIso = iso(today);
+      const deliveryIso = iso(delivery);
+      let status = 'delivered';
+      if (deliveryIso > todayIso) status = daysAgo === 0 ? (n === 0 ? 'new' : 'confirmed') : 'confirmed';
+      else if (deliveryIso === todayIso) status = 'out_for_delivery';
+      let id;
+      do { id = 'CCH-' + (10000 + Math.floor(rnd() * 90000)); } while (used.has(id));
+      used.add(id);
+      const totalCases = items.reduce((t, i) => t + i.cases, 0);
+      list.push({
+        id, account_number: c.account, business_name: c.name, business_type: c.type, area: c.area,
+        items, unmatched: [], total_cases: totalCases,
+        total_eur: Math.round(items.reduce((t, i) => t + i.line_total_eur, 0) * 100) / 100,
+        delivery_date: deliveryIso, requested_delivery: '', notes: pick(SEED_NOTES), status,
+        source: pick(SEED_SOURCES), demo_history: true,
+        created_at: created.toISOString(), updated_at: created.toISOString(),
+      });
+    }
+  }
+  return list.sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
 function orderId() {
   let id;
   do { id = 'CCH-' + (10000 + crypto.randomInt(90000)); } while (orders.some((o) => o.id === id));
@@ -395,6 +469,7 @@ app.post('/api/orders/status', agentAuth, (req, res) => {
     total_cases: order.total_cases,
     total_eur: order.total_eur,
     lines: order.items.map((i) => `${i.cases} x ${i.name} (${i.pack})`),
+    reorder_items: order.items.map((i) => `${i.sku}:${i.cases}`).join(', '),
   });
 });
 
@@ -415,16 +490,22 @@ app.patch('/api/orders/:id', adminAuth, (req, res) => {
 
 app.delete('/api/orders', adminAuth, (req, res) => {
   const removed = orders.length;
-  orders = [];
+  const empty = req.query.mode === 'empty' || !SEED_DEMO;
+  orders = empty ? [] : buildDemoHistory();
   save();
-  res.json({ success: true, removed });
+  res.json({ success: true, removed, history: orders.length });
 });
 
-app.get('/api/config', (req, res) => res.json({ adminTokenRequired: Boolean(ADMIN_TOKEN) }));
+app.get('/api/config', (req, res) => res.json({ adminTokenRequired: Boolean(ADMIN_TOKEN), demoHistory: SEED_DEMO }));
 app.use('/api', (req, res) => res.status(404).json({ success: false, error: 'Unknown endpoint.' }));
 
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 app.get('/backoffice', (req, res) => res.redirect(301, '/backoffice/'));
 
 load();
+if (!orders.length && SEED_DEMO) {
+  orders = buildDemoHistory();
+  save();
+  console.log(`Created ${orders.length} demo history orders`);
+}
 app.listen(PORT, () => console.log(`CCH order line demo on :${PORT}`));
