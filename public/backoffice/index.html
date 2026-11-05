@@ -56,6 +56,7 @@
   .tabs button[aria-pressed="true"] { background: var(--text); color: var(--surface); }
   .clear { background: none; border: 1px solid var(--line); color: var(--muted); padding: .45rem .9rem; border-radius: 8px; }
   .clear:hover { border-color: var(--red); color: var(--red); }
+  .board-actions { display: flex; gap: .5rem; }
 
   .list { list-style: none; margin: 0 0 3rem; padding: 0; display: grid; gap: .75rem; }
   .order { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; transition: background-color 1.2s ease; }
@@ -113,12 +114,16 @@
   <div class="toolbar">
     <div class="tabs" role="group" aria-label="Filter orders">
       <button type="button" data-f="all" aria-pressed="true">All</button>
+      <button type="button" data-f="today" aria-pressed="false">Today</button>
       <button type="button" data-f="new" aria-pressed="false">New</button>
       <button type="button" data-f="confirmed" aria-pressed="false">Confirmed</button>
       <button type="button" data-f="out_for_delivery" aria-pressed="false">Out for delivery</button>
       <button type="button" data-f="delivered" aria-pressed="false">Delivered</button>
     </div>
-    <button type="button" class="clear" id="clear">Clear board</button>
+    <div class="board-actions">
+      <button type="button" class="clear" id="reset" title="Remove the orders from demo calls and restore the two-week demo history">Reset demo</button>
+      <button type="button" class="clear" id="clear" title="Remove every order, including the demo history">Clear all</button>
+    </div>
   </div>
 
   <p class="error" id="error" hidden></p>
@@ -139,7 +144,10 @@
     var s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
     if (s < 60) return s + ' s ago';
     if (s < 3600) return Math.round(s / 60) + ' min ago';
-    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    var d = new Date(iso);
+    var time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    if (d.toDateString() === new Date().toDateString()) return 'today ' + time;
+    return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) + ', ' + time;
   }
   function day(isoDate) {
     return new Date(isoDate + 'T12:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
@@ -168,11 +176,14 @@
     $('s-value').textContent = eur.format(todays.reduce(function (n, o) { return n + o.total_eur; }, 0));
     $('s-open').textContent = items.filter(function (o) { return o.status !== 'delivered'; }).length;
 
-    var shown = items.filter(function (o) { return filter === 'all' || o.status === filter; });
+    var shown = items.filter(function (o) {
+      if (filter === 'today') return new Date(o.created_at).toDateString() === today;
+      return filter === 'all' || o.status === filter;
+    });
     var list = $('list');
     if (!shown.length) {
       list.innerHTML = '<li class="empty"><strong>' + (items.length ? 'Nothing in this view' : 'No orders yet') + '</strong>' +
-        (items.length ? 'Pick another filter to see the rest.' : 'Call the order line from the website. New orders appear here within a few seconds.') + '</li>';
+        (items.length ? 'Pick another filter to see the rest.' : 'Use Reset demo to restore the order history, or call the order line. New orders appear here within a few seconds.') + '</li>';
       return;
     }
     list.innerHTML = shown.map(function (o) {
@@ -181,7 +192,7 @@
         return '<tr><td class="q">' + i.cases + ' ×</td><td>' + esc(i.name) + ' <span class="pack">' + esc(i.pack) + '</span></td><td class="amt">' + eur.format(i.line_total_eur) + '</td></tr>';
       }).join('');
       var next = NEXT[o.status] ? '<button type="button" data-id="' + o.id + '" data-s="' + NEXT[o.status][0] + '">' + NEXT[o.status][1] + '</button>' : '';
-      var back = o.status !== 'new' ? '<button type="button" data-id="' + o.id + '" data-s="new">Reset</button>' : '';
+      var back = o.status !== 'new' ? '<button type="button" data-id="' + o.id + '" data-s="new">Back to new</button>' : '';
       return '<li class="order' + (fresh ? ' fresh' : '') + (o.status === 'delivered' ? ' is-delivered' : '') + '">' +
         '<div class="head"><span class="id">' + esc(o.id) + '</span><span class="tag ' + o.status + '">' + STATUS[o.status] + '</span>' +
         '<span class="who">' + esc(o.business_name) + '</span><span class="meta">Account ' + esc(o.account_number) + ', ' + esc(o.area) + '</span>' +
@@ -227,9 +238,14 @@
     send('PATCH', '/api/orders/' + encodeURIComponent(b.dataset.id), { status: b.dataset.s }).then(poll)
       .catch(function (err) { alert('Couldn’t update the order. ' + err.message); b.disabled = false; });
   });
+  $('reset').addEventListener('click', function () {
+    if (!confirm('Restore the two-week demo history? Orders from demo calls will be removed.')) return;
+    seen = null;
+    send('DELETE', '/api/orders').then(poll).catch(function (err) { alert('Couldn’t reset the board. ' + err.message); });
+  });
   $('clear').addEventListener('click', function () {
-    if (!confirm('Remove every order from the board? Use this to reset before a demo.')) return;
-    send('DELETE', '/api/orders').then(poll).catch(function (err) { alert('Couldn’t clear the board. ' + err.message); });
+    if (!confirm('Remove every order, including the demo history?')) return;
+    send('DELETE', '/api/orders?mode=empty').then(poll).catch(function (err) { alert('Couldn’t clear the board. ' + err.message); });
   });
 
   poll();
