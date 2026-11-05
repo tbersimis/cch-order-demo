@@ -1,7 +1,7 @@
 // Live Hub Click-to-Call for the Coca-Cola HBC order line demo.
 (function () {
-    var USERNAME = 'CCH-Web-Customer';          // caller label (no credentials on the SIP connection)
-    var PASSWORD = '';                          // empty: Credentials is not ticked in Live Hub
+    var USERNAME = 'cchusername';          // caller label (no credentials on the SIP connection)
+    var PASSWORD = 'cchpassword';                          // empty: Credentials is not ticked in Live Hub
     var CALL_NUMBER = 'C2C-Order-Call';         // shown as the callee in Live Hub (no spaces)
     var DOMAIN = 'bxtqfbmjjhxp.sip1-region1.audiocodes.io';
     var WSS = 'wss://bxtqfbmjjhxp.sip1-region1.audiocodes.io';
