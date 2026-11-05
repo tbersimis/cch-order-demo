@@ -1,0 +1,6 @@
+Put the official Coca-Cola HBC logo in this folder as:
+
+  logo.svg   (preferred)   or   logo.png
+
+Use the file from Coca-Cola HBC's official press kit or your customer contact.
+The site shows the text "Coca-Cola HBC" until the file is there.

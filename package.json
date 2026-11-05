@@ -1,0 +1,10 @@
+{
+  "name": "cch-order-demo",
+  "version": "1.0.0",
+  "description": "Coca-Cola HBC order line demo: website + order back office for an AudioCodes Live Hub AI agent",
+  "main": "server.js",
+  "private": true,
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "express": "4.19.2" }
+}
